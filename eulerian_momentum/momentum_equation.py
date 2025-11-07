@@ -323,13 +323,16 @@ class MomentumEquation:
     ) -> np.ndarray:
         """Calculate gradient of a scalar field using central differences."""
         if len(field.shape) == 1:
-            # 1D case
+            # 1D case - assuming vertical (z-direction) domain for DAF context
+            # DAF simulations are inherently vertical (bubbles rise, particles settle)
             n = field.shape[0]
             grad = np.zeros((n, 3), dtype=np.float64)
-            # x-direction
-            grad[1:-1, 0] = (field[2:] - field[:-2]) / (2 * dx)
-            grad[0, 0] = (field[1] - field[0]) / dx
-            grad[-1, 0] = (field[-1] - field[-2]) / dx
+            # Use dz for 1D vertical gradient, fallback to dx if dz is None
+            grid_spacing = dz if dz is not None else dx
+            # Store gradient in z-component (index 2) for vertical domain
+            grad[1:-1, 2] = (field[2:] - field[:-2]) / (2 * grid_spacing)
+            grad[0, 2] = (field[1] - field[0]) / grid_spacing
+            grad[-1, 2] = (field[-1] - field[-2]) / grid_spacing
         else:
             # 3D case
             nx, ny, nz = field.shape

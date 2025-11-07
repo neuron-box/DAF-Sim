@@ -77,17 +77,18 @@ class TestMomentumEquation(unittest.TestCase):
 
     def test_pressure_gradient_term_linear_gradient(self):
         """Test pressure gradient with linear pressure field."""
-        # Pressure with constant gradient: dp/dx = -1000 Pa/m
-        x = np.linspace(0, (self.n - 1) * self.dx, self.n)
-        pressure = 101325.0 - 1000.0 * x
+        # For 1D domain (vertical), pressure varies along array index
+        # Create pressure with constant gradient: dp/dz = -1000 Pa/m
+        z = np.linspace(0, (self.n - 1) * self.dx, self.n)
+        pressure = 101325.0 - 1000.0 * z
 
         grad_p = self.solver.pressure_gradient_term(self.phase, pressure, self.dx)
 
-        # Expected: α * (-1000) in x-direction
-        expected_x = 0.8 * (-1000.0)
+        # Expected: α * (-1000) in z-direction (index 2) for 1D vertical domain
+        expected_z = 0.8 * (-1000.0)
 
         # Check interior points (boundaries may have different values due to one-sided differences)
-        self.assertTrue(np.allclose(grad_p[2:-2, 0], expected_x, rtol=0.1))
+        self.assertTrue(np.allclose(grad_p[2:-2, 2], expected_z, rtol=0.1))
 
     def test_gravity_term(self):
         """Test gravitational body force term."""

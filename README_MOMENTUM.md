@@ -253,6 +253,20 @@ This module is designed as a foundational component for Dissolved Air Flotation 
 - **Temporal Discretization**: Forward Euler (1st order accurate)
 - **Boundary Conditions**: One-sided differences at domain boundaries
 
+### Important Note on 1D Domain Orientation
+
+**For 1D simulations**, the implementation assumes a **vertical (z-direction) domain**, which is appropriate for DAF applications where:
+- Bubbles rise due to buoyancy (vertical motion)
+- Particles settle under gravity (vertical motion)
+- Pressure varies hydrostatically in the vertical direction
+
+**Key implementation detail:**
+- Gradients in 1D are stored in the **z-component (index 2)** of velocity/force vectors
+- Grid spacing parameter `dz` is used if provided, otherwise falls back to `dx`
+- This ensures physical consistency with the inherently vertical nature of DAF processes
+
+For **3D simulations**, all three spatial directions (x, y, z) are handled independently.
+
 **Note**: For production simulations, higher-order schemes and proper boundary condition handling should be implemented.
 
 ## Limitations and Future Work

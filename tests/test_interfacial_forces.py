@@ -198,9 +198,10 @@ class TestInterfacialForces(unittest.TestCase):
 
         # Force should oppose gradient (Fick's law)
         # Gradient is positive (increasing), so force should be negative
-        # Actually, the formula is F_TD = -ρ_c * D_t * ∇α
-        # So if ∇α > 0, then F_TD < 0 in that direction
-        interior_force = td_force[5:-5, 0]
+        # Formula: F_TD = -ρ_c * D_t * ∇α
+        # For 1D vertical domain, gradient is stored in z-component (index 2)
+        # If ∇α > 0, then F_TD < 0 in that direction
+        interior_force = td_force[5:-5, 2]
         self.assertTrue(np.mean(interior_force) < 0)
 
     def test_total_interfacial_force_drag_only(self):
