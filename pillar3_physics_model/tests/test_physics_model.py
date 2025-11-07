@@ -104,8 +104,21 @@ class TestFluidProperties(unittest.TestCase):
         fluid = FluidProperties.water_at_20C(ionic_strength=0.001)
         debye_length = fluid.debye_length
 
-        # For I = 0.001 M, Debye length should be ~9.6 nm
-        expected = 0.304 / math.sqrt(0.001) * 1e-9
+        # With temperature-dependent formula at 20°C (293.15 K):
+        # λ_D = √(ε₀ε_r k_B T / (2 N_A e² I))
+        epsilon_0 = 8.854187817e-12
+        k_B = 1.380649e-23
+        N_A = 6.02214076e23
+        e = 1.602176634e-19
+        epsilon_r = 78.5
+        T = 293.15  # 20°C
+        I = 0.001 * 1000.0  # Convert M to mol/m³
+
+        expected = math.sqrt(
+            (epsilon_0 * epsilon_r * k_B * T) /
+            (2.0 * N_A * e**2 * I)
+        )
+
         self.assertAlmostEqual(debye_length, expected, places=12)
 
     def test_thermal_voltage(self):
@@ -115,6 +128,61 @@ class TestFluidProperties(unittest.TestCase):
 
         # At 20°C, thermal voltage should be ~25.3 mV
         self.assertAlmostEqual(V_T, 0.0253, places=3)
+
+    def test_debye_length_temperature_dependence(self):
+        """Test that Debye length is temperature-dependent."""
+        ionic_strength = 0.001  # M
+
+        # Create fluid at different temperatures
+        fluid_5C = FluidProperties(
+            temperature=278.15,  # 5°C
+            ionic_strength=ionic_strength,
+            dynamic_viscosity=0.001519,
+            density=1000.0,
+            dielectric_constant=78.5
+        )
+
+        fluid_25C = FluidProperties(
+            temperature=298.15,  # 25°C
+            ionic_strength=ionic_strength,
+            dynamic_viscosity=0.00089,
+            density=997.0,
+            dielectric_constant=78.5
+        )
+
+        fluid_45C = FluidProperties(
+            temperature=318.15,  # 45°C
+            ionic_strength=ionic_strength,
+            dynamic_viscosity=0.000596,
+            density=990.2,
+            dielectric_constant=78.5
+        )
+
+        # Get Debye lengths
+        lambda_5C = fluid_5C.debye_length
+        lambda_25C = fluid_25C.debye_length
+        lambda_45C = fluid_45C.debye_length
+
+        # Debye length should increase with temperature (λ ∝ √T)
+        self.assertLess(lambda_5C, lambda_25C)
+        self.assertLess(lambda_25C, lambda_45C)
+
+        # Check approximate relationship: λ(T2)/λ(T1) ≈ √(T2/T1)
+        ratio_measured = lambda_25C / lambda_5C
+        ratio_expected = math.sqrt(298.15 / 278.15)
+        self.assertAlmostEqual(ratio_measured, ratio_expected, places=3)
+
+    def test_debye_length_at_25C(self):
+        """Test that Debye length at 25°C matches simplified formula."""
+        fluid = FluidProperties.water_at_25C(ionic_strength=0.001)
+        debye_length = fluid.debye_length
+
+        # At 25°C, simplified formula: λ_D = 0.304/√I [nm]
+        expected_nm = 0.304 / math.sqrt(0.001)
+        expected_m = expected_nm * 1e-9
+
+        # Should match within 1%
+        self.assertAlmostEqual(debye_length, expected_m, delta=expected_m * 0.01)
 
 
 class TestDLVOForces(unittest.TestCase):
@@ -317,6 +385,40 @@ class TestCollisionEfficiency(unittest.TestCase):
         self.assertLessEqual(result['eta_collision'], 1.0)
         self.assertGreaterEqual(result['alpha_attachment'], 0.0)
         self.assertLessEqual(result['alpha_attachment'], 1.0)
+
+    def test_critical_offset_consistency(self):
+        """Test that critical_offset is consistent with eta_collision."""
+        particle = Particle(
+            diameter=10e-6,
+            zeta_potential=-0.025,
+            density=2650.0,
+            hamaker_constant=5e-21
+        )
+        bubble = Bubble(diameter=50e-6, zeta_potential=-0.030)
+        fluid = FluidProperties.water_at_20C(ionic_strength=0.001)
+
+        result = calculate_attachment_efficiency(particle, bubble, fluid)
+
+        # Verify relationship: η_c = (y_c / R_b)²
+        # Therefore: y_c = R_b * √η_c
+        expected_critical_offset = bubble.radius * math.sqrt(result['eta_collision'])
+
+        # Should match within numerical precision
+        self.assertAlmostEqual(
+            result['critical_offset'],
+            expected_critical_offset,
+            places=10,
+            msg="critical_offset should equal bubble.radius * sqrt(eta_collision)"
+        )
+
+        # Also verify the reverse calculation
+        calculated_eta = (result['critical_offset'] / bubble.radius) ** 2
+        self.assertAlmostEqual(
+            calculated_eta,
+            result['eta_collision'],
+            places=10,
+            msg="(critical_offset / bubble.radius)² should equal eta_collision"
+        )
 
     def test_opposite_charges(self):
         """Test collision efficiency with opposite charges."""

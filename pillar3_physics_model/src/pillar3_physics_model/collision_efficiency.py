@@ -2,10 +2,15 @@
 Collision Efficiency Factor (α_bp) Calculation
 
 This module implements the main function to calculate the collision efficiency
-factor based on trajectory analysis with DLVO theory.
+factor using a semi-analytical approach that combines classical single-collector
+theory with DLVO force corrections.
+
+The methodology is based on Han et al. (2001) but uses analytical approximations
+for improved computational efficiency and numerical stability.
 
 References:
     - Han, M.Y., Kim, W., & Dockko, S. (2001). Water Science and Technology, 43(8), 139-144.
+    - Yoon, R. H., & Luttrell, G. H. (1989). Mineral Processing and Extractive Metallurgy Review.
 """
 
 import math
@@ -31,30 +36,38 @@ def calculate_attachment_efficiency(
     successfully attach to the bubble upon collision, accounting for both
     hydrodynamic and physicochemical (DLVO) forces.
 
-    Methodology (Han et al., 2001):
-    -----------
-    The collision efficiency is calculated using trajectory analysis:
+    Methodology - Semi-Analytical Approach:
+    ---------------------------------------
+    This implementation uses a semi-analytical method that combines classical
+    single-collector collision theory with DLVO force corrections. This approach
+    provides computational efficiency and numerical stability compared to full
+    trajectory integration.
 
-    1. A particle approaches a bubble in the bubble's rising flow field
-    2. The particle trajectory is determined by:
-       - Hydrodynamic forces (drag in bubble flow field)
-       - DLVO forces (van der Waals attraction + electrostatic repulsion)
-       - Gravitational force (buoyancy corrected)
+    1. **Base Collision Efficiency** (η_base):
+       - Interception mechanism: η_int = 1.5 × (R_p/R_b)²
+       - Gravity settling: η_grav = N_G × (R_p/R_b)
+       - Combined: η_base = η_int + η_grav
 
-    3. The collision efficiency η_c is defined as:
-       η_c = (y_c / R_b)²
+    2. **DLVO Energy Barrier Analysis**:
+       - Van der Waals attraction (Hamaker constant)
+       - Electrostatic repulsion (zeta potentials, Debye length)
+       - Total interaction energy profile calculated
 
-       Where:
-       - y_c is the critical radial offset (maximum offset for collision)
-       - R_b is the bubble radius
+    3. **DLVO Correction Factor** (f_DLVO):
+       - If barrier > 0: f_DLVO = exp(-E_barrier/3kT) (reduces efficiency)
+       - If barrier < 0: f_DLVO > 1 (attractive, enhances efficiency)
 
-    4. The attachment efficiency α is determined by the energy barrier:
-       - If energy barrier > 10 kT: α ≈ 0 (unfavorable attachment)
-       - If energy barrier < 10 kT: α determined by trajectory analysis
-       - α ranges from 0 (no attachment) to 1 (complete attachment)
+    4. **Collision Efficiency**:
+       η_c = η_base × f_DLVO
 
-    5. Total collision efficiency factor:
-       α_bp = η_c * α
+    5. **Attachment Efficiency** (α):
+       - Based on energy barrier height
+       - If E_barrier < 0: α = 1.0 (favorable)
+       - If 0 < E_barrier < 10 kT: α = 1 - exp(-10/E_barrier_kT)
+       - If E_barrier > 10 kT: α = exp(-E_barrier_kT/2)
+
+    6. **Total Collision Efficiency Factor**:
+       α_bp = η_c × α
 
     Parameters:
     -----------
@@ -81,10 +94,12 @@ def calculate_attachment_efficiency(
         - ph [-]
 
     method : str, optional
-        Calculation method. Currently only "trajectory" is implemented.
+        Calculation method. Default is "trajectory" which uses the semi-analytical
+        approach described above. This parameter is reserved for potential future
+        implementations (e.g., full numerical trajectory integration).
 
     tolerance : float, optional
-        Tolerance for critical offset calculation [m].
+        Numerical tolerance parameter (reserved for future use).
 
     Returns:
     --------
@@ -126,11 +141,18 @@ def calculate_attachment_efficiency(
        - ζ_p, ζ_b: Zeta potentials [V]
        - h: Surface-to-surface separation [m]
 
-    3. **Debye Length**:
+    3. **Debye Length** (temperature-dependent):
 
-       λ_D = 0.304 / √I  [nm]
+       λ_D = √(ε₀ε_r k_B T / (2 N_A e² I))
 
-       Where I is ionic strength [mol/L]
+       Where:
+       - ε₀ = vacuum permittivity
+       - ε_r = dielectric constant
+       - k_B = Boltzmann constant
+       - T = temperature
+       - I = ionic strength [mol/L]
+
+       (Simplified form at 25°C: λ_D ≈ 0.304/√I [nm])
 
     4. **Hydrodynamic Drag Force** (Stokes):
 
@@ -182,19 +204,25 @@ def calculate_attachment_efficiency(
 
     Notes:
     ------
-    - The method assumes Stokes flow regime (low Reynolds number)
+    - This implementation uses a **semi-analytical approach** rather than full
+      numerical trajectory integration for improved robustness and efficiency
+    - The method assumes Stokes flow regime (low Reynolds number, Re < 0.1)
     - DLVO theory assumes additivity of van der Waals and electrostatic forces
-    - Zeta potential is assumed equal to surface potential
-    - The trajectory analysis uses spherical coordinates with the bubble at origin
+    - Zeta potential is approximated as surface potential
     - Results are most accurate for particles and bubbles in the 1-100 μm range
+    - The TrajectorySolver class is available for future trajectory-based methods
+      but is not used in the current implementation
     """
 
     if method != "trajectory":
         raise ValueError(f"Unknown method: {method}. Only 'trajectory' is supported.")
 
-    # Initialize force calculators
+    # Initialize DLVO force calculator
     dlvo = DLVOForces(particle, bubble, fluid_properties)
-    solver = TrajectorySolver(particle, bubble, fluid_properties)
+
+    # Note: TrajectorySolver is not used in the current semi-analytical implementation
+    # It is available for future trajectory-based methods if needed
+    # solver = TrajectorySolver(particle, bubble, fluid_properties)
 
     # Check if attachment is energetically favorable
     attachment_favorable = dlvo.is_favorable_for_attachment()
@@ -268,7 +296,8 @@ def calculate_attachment_efficiency(
         # Simplified estimate based on interception
         eta_collision = 1.5 * (particle.radius / bubble.radius) ** 2
         eta_collision = min(eta_collision, 1.0)
-        critical_offset = particle.radius
+        # Calculate critical_offset consistent with η_c = (y_c / R_b)²
+        critical_offset = bubble.radius * math.sqrt(eta_collision)
 
     # Total collision efficiency factor
     alpha_bp = eta_collision * alpha_attachment

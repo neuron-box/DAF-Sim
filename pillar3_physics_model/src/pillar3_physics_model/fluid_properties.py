@@ -46,18 +46,42 @@ class FluidProperties:
         """
         Calculate the Debye length (electrical double layer thickness).
 
-        For aqueous solutions at 25°C:
-        κ⁻¹ = 0.304 / √(I) [nm]
+        Full temperature-dependent calculation:
+        λ_D = √(ε₀ε_r k_B T / (2 N_A e² I))
 
-        Where I is ionic strength in mol/L.
+        Where:
+        - ε₀ = vacuum permittivity [F/m]
+        - ε_r = relative dielectric constant
+        - k_B = Boltzmann constant [J/K]
+        - T = temperature [K]
+        - N_A = Avogadro's number [1/mol]
+        - e = elementary charge [C]
+        - I = ionic strength [mol/L]
+
+        Note: The simplified formula λ_D = 0.304/√I [nm] is only valid
+        for water at 25°C. This implementation accounts for temperature.
 
         Returns:
             Debye length [m]
         """
-        # Debye length in nanometers
-        debye_nm = 0.304 / math.sqrt(self.ionic_strength)
-        # Convert to meters
-        return debye_nm * 1e-9
+        # Physical constants
+        epsilon_0 = 8.854187817e-12  # Vacuum permittivity [F/m]
+        k_B = 1.380649e-23  # Boltzmann constant [J/K]
+        N_A = 6.02214076e23  # Avogadro's number [1/mol]
+        e = 1.602176634e-19  # Elementary charge [C]
+
+        # System parameters
+        epsilon_r = self.dielectric_constant
+        T = self.temperature  # [K]
+        I = self.ionic_strength * 1000.0  # Convert from M to mol/m³
+
+        # Calculate Debye length
+        numerator = epsilon_0 * epsilon_r * k_B * T
+        denominator = 2.0 * N_A * e**2 * I
+
+        debye_length_m = math.sqrt(numerator / denominator)
+
+        return debye_length_m
 
     @property
     def debye_parameter(self) -> float:
