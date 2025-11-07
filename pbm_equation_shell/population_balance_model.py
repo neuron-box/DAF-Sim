@@ -11,10 +11,14 @@ Reference:
 
 The discretized PBE (Equation 2) describes the time evolution of particle
 number concentrations through aggregation and breakage mechanisms.
+
+This implementation supports both linear and geometric particle volume grids
+using the fixed pivot technique (Kumar & Ramkrishna, 1996) for geometric grids.
 """
 
 import numpy as np
-from typing import Optional
+from typing import Optional, Literal
+import warnings
 
 
 class PopulationBalanceModel:
@@ -24,6 +28,9 @@ class PopulationBalanceModel:
     This class implements the discretized Population Balance Equation (PBE)
     that describes particle aggregation and breakage in a flocculation system.
 
+    Supports both linear and geometric particle volume grids with proper
+    mass conservation.
+
     Mathematical Formulation:
     -------------------------
     The discretized PBE for each size class i is:
@@ -31,46 +38,37 @@ class PopulationBalanceModel:
     dN_i/dt = (Birth by aggregation) - (Death by aggregation)
               + (Birth by breakage) - (Death by breakage)
 
-    Explicitly:
+    For LINEAR grids (v_i = i·Δv):
 
     dN_i/dt = (1/2) * Σ_{j=1}^{i-1} β_{j,i-j} * α_{j,i-j} * N_j * N_{i-j}
               - N_i * Σ_{j=1}^{n} β_{i,j} * α_{i,j} * N_j
               + Σ_{j=i+1}^{n} S_j * γ_{j,i} * N_j
               - S_i * N_i
 
-    Where:
-    ------
-    N_i : float
-        Number concentration of particles in size class i [#/m³]
-
-    β_{i,j} : float
-        Collision frequency between particles of size class i and j [m³/s]
-        Constructed from three mechanisms:
-        - Perikinetic (Brownian motion)
-        - Differential sedimentation
-        - Orthokinetic (shear-induced)
-
-    α_{i,j} : float
-        Collision efficiency between particles of size class i and j [-]
-        Dimensionless, ranges from 0 to 1
-
-    S_i : float
-        Breakage rate of particles in size class i [1/s]
-
-    γ_{j,i} : float
-        Breakage distribution function [-]
-        Probability that breakage of particle j produces particle i
-        Satisfies: Σ_i γ_{j,i} = 1
+    For GEOMETRIC grids (v_i = v_0·r^i):
+    Uses fixed pivot technique to distribute mass between adjacent bins.
 
     Attributes:
     -----------
     n_classes : int
         Number of discrete size classes
+    particle_volumes : np.ndarray
+        Volume of particles in each size class [m³]
+    grid_type : str
+        Type of volume grid: 'linear' or 'geometric'
+    grid_ratio : float or None
+        Ratio r for geometric grids (v_i = v_0 * r^i)
     validate_inputs : bool
         Whether to validate kernel inputs for consistency
     """
 
-    def __init__(self, n_classes: int, validate_inputs: bool = True):
+    def __init__(
+        self,
+        n_classes: int,
+        particle_volumes: np.ndarray,
+        validate_inputs: bool = True,
+        grid_type: Optional[Literal['linear', 'geometric']] = None
+    ):
         """
         Initialize the Population Balance Model.
 
@@ -78,15 +76,167 @@ class PopulationBalanceModel:
         -----------
         n_classes : int
             Number of discrete size classes (bins) for particle size distribution
+        particle_volumes : np.ndarray
+            Volume of particles in each size class [m³]
+            Shape: (n_classes,)
+            For geometric grids: v_i = v_0 * r^i
+            For linear grids: v_i = v_0 + i * Δv
         validate_inputs : bool, optional
             Whether to validate kernel matrices/vectors for physical consistency
             Default is True
+        grid_type : {'linear', 'geometric'}, optional
+            Type of volume grid. If None, auto-detected from particle_volumes.
+            Default is None (auto-detect)
+
+        Raises:
+        -------
+        ValueError
+            If n_classes < 2 or particle_volumes has wrong shape
         """
         if n_classes < 2:
             raise ValueError("Number of size classes must be at least 2")
 
+        if particle_volumes.shape != (n_classes,):
+            raise ValueError(
+                f"particle_volumes must have shape ({n_classes},), "
+                f"got {particle_volumes.shape}"
+            )
+
+        if np.any(particle_volumes <= 0):
+            raise ValueError("particle_volumes must contain positive values")
+
+        if not np.all(np.diff(particle_volumes) > 0):
+            raise ValueError("particle_volumes must be strictly increasing")
+
         self.n_classes = n_classes
+        self.particle_volumes = particle_volumes.copy()
         self.validate_inputs = validate_inputs
+
+        # Detect or validate grid type
+        if grid_type is None:
+            self.grid_type = self._detect_grid_type()
+        else:
+            if grid_type not in ['linear', 'geometric']:
+                raise ValueError("grid_type must be 'linear' or 'geometric'")
+            self.grid_type = grid_type
+
+        # For geometric grids, calculate and store the grid ratio
+        if self.grid_type == 'geometric':
+            self.grid_ratio = self._calculate_grid_ratio()
+        else:
+            self.grid_ratio = None
+
+    def _detect_grid_type(self) -> str:
+        """
+        Auto-detect whether the grid is linear or geometric.
+
+        Returns:
+        --------
+        grid_type : str
+            'linear' or 'geometric'
+        """
+        # Check if ratios are approximately constant (geometric grid)
+        ratios = self.particle_volumes[1:] / self.particle_volumes[:-1]
+
+        # If ratios are approximately constant, it's geometric
+        if np.std(ratios) / np.mean(ratios) < 0.01:  # 1% coefficient of variation
+            return 'geometric'
+
+        # Check if differences are approximately constant (linear grid)
+        diffs = np.diff(self.particle_volumes)
+
+        if np.std(diffs) / np.mean(diffs) < 0.01:
+            return 'linear'
+
+        # Default to geometric (more common in practice)
+        warnings.warn(
+            "Grid type could not be definitively determined. "
+            "Defaulting to 'geometric'. Specify grid_type explicitly to avoid ambiguity."
+        )
+        return 'geometric'
+
+    def _calculate_grid_ratio(self) -> float:
+        """
+        Calculate the grid ratio r for geometric grids.
+
+        Returns:
+        --------
+        r : float
+            Grid ratio (v_{i+1} / v_i)
+        """
+        ratios = self.particle_volumes[1:] / self.particle_volumes[:-1]
+        return np.mean(ratios)
+
+    def _find_target_bin(self, v_new: float) -> int:
+        """
+        Find the bin index where v_new falls.
+
+        Uses binary search for efficiency.
+
+        Parameters:
+        -----------
+        v_new : float
+            Volume of newly formed particle [m³]
+
+        Returns:
+        --------
+        i : int
+            Bin index where v_i <= v_new < v_{i+1}
+            Returns n_classes-1 if v_new >= v_max (overflow)
+            Returns -1 if v_new < v_min (underflow, shouldn't happen)
+        """
+        # Handle edge cases
+        if v_new >= self.particle_volumes[-1]:
+            return self.n_classes - 1  # Overflow to largest bin
+
+        if v_new < self.particle_volumes[0]:
+            return -1  # Underflow (shouldn't happen in aggregation)
+
+        # Binary search
+        i = np.searchsorted(self.particle_volumes, v_new, side='right') - 1
+        return i
+
+    def _calculate_distribution_factors(self, v_new: float, i: int) -> tuple[float, float]:
+        """
+        Calculate distribution factors ξ and η for geometric grids.
+
+        Distributes mass between bins i and i+1 to conserve number and volume.
+
+        Parameters:
+        -----------
+        v_new : float
+            Volume of newly formed particle [m³]
+        i : int
+            Lower bin index (v_i <= v_new < v_{i+1})
+
+        Returns:
+        --------
+        xi : float
+            Fraction going to bin i
+        eta : float
+            Fraction going to bin i+1
+
+        Notes:
+        ------
+        ξ + η = 1 (number conservation)
+        ξ*v_i + η*v_{i+1} = v_new (volume conservation)
+        """
+        # Handle overflow to largest bin
+        if i >= self.n_classes - 1:
+            return 1.0, 0.0
+
+        # Handle underflow (shouldn't happen)
+        if i < 0:
+            return 0.0, 0.0
+
+        v_i = self.particle_volumes[i]
+        v_ip1 = self.particle_volumes[i + 1]
+
+        # Distribution factors
+        eta = (v_new - v_i) / (v_ip1 - v_i)
+        xi = 1.0 - eta
+
+        return xi, eta
 
     def calculate_dndt(
         self,
@@ -101,6 +251,9 @@ class PopulationBalanceModel:
 
         This method implements the discretized Population Balance Equation (Equation 2
         from Abreu et al., 2021) to compute dN/dt for all size classes.
+
+        For geometric grids, uses the fixed pivot technique (Kumar & Ramkrishna, 1996)
+        to properly conserve mass during aggregation.
 
         Parameters:
         -----------
@@ -160,27 +313,28 @@ class PopulationBalanceModel:
         # Initialize the derivative vector
         dndt = np.zeros(self.n_classes, dtype=np.float64)
 
-        # Loop through each size class
-        for i in range(self.n_classes):
-            # Term 1: Birth by aggregation
-            # (1/2) * Σ_{j=1}^{i-1} β_{j,i-j} * α_{j,i-j} * N_j * N_{i-j}
-            # Particles of size i are formed by collision of smaller particles j and (i-j)
-            birth_aggregation = 0.0
-            for j in range(i):  # j from 0 to i-1 (Python 0-indexed)
-                k = i - j - 1  # Corresponding size class (i-j in 1-indexed becomes i-j-1 in 0-indexed)
-                if k >= 0 and k < self.n_classes:
-                    birth_aggregation += (
-                        beta_matrix[j, k] * alpha_matrix[j, k] * N[j] * N[k]
-                    )
-            birth_aggregation *= 0.5  # Factor of 1/2 to avoid double counting
+        # Choose aggregation method based on grid type
+        if self.grid_type == 'linear':
+            birth_aggregation = self._calculate_birth_aggregation_linear(
+                N, alpha_matrix, beta_matrix
+            )
+        else:  # geometric
+            birth_aggregation = self._calculate_birth_aggregation_geometric(
+                N, alpha_matrix, beta_matrix
+            )
 
+        # Add birth by aggregation
+        dndt += birth_aggregation
+
+        # Loop through each size class for remaining terms
+        for i in range(self.n_classes):
             # Term 2: Death by aggregation
             # -N_i * Σ_{j=1}^{n} β_{i,j} * α_{i,j} * N_j
             # Particles of size i are lost through collision with any other particle j
             death_aggregation = 0.0
             for j in range(self.n_classes):
                 death_aggregation += beta_matrix[i, j] * alpha_matrix[i, j] * N[j]
-            death_aggregation *= N[i]
+            dndt[i] -= death_aggregation * N[i]
 
             # Term 3: Birth by breakage
             # Σ_{j=i+1}^{n} S_j * γ_{j,i} * N_j
@@ -188,21 +342,117 @@ class PopulationBalanceModel:
             birth_breakage = 0.0
             for j in range(i + 1, self.n_classes):
                 birth_breakage += S_vector[j] * gamma_matrix[j, i] * N[j]
+            dndt[i] += birth_breakage
 
             # Term 4: Death by breakage
             # -S_i * N_i
             # Particles of size i are lost through their own breakage
-            death_breakage = S_vector[i] * N[i]
-
-            # Combine all terms
-            dndt[i] = (
-                birth_aggregation
-                - death_aggregation
-                + birth_breakage
-                - death_breakage
-            )
+            dndt[i] -= S_vector[i] * N[i]
 
         return dndt
+
+    def _calculate_birth_aggregation_linear(
+        self,
+        N: np.ndarray,
+        alpha_matrix: np.ndarray,
+        beta_matrix: np.ndarray
+    ) -> np.ndarray:
+        """
+        Calculate birth by aggregation for LINEAR volume grids.
+
+        For linear grids: v_i = v_0 + i*Δv, so v_j + v_k = v_{j+k}
+
+        Parameters:
+        -----------
+        N : np.ndarray
+            Particle number concentrations [#/m³]
+        alpha_matrix : np.ndarray
+            Collision efficiency matrix [-]
+        beta_matrix : np.ndarray
+            Collision frequency matrix [m³/s]
+
+        Returns:
+        --------
+        birth : np.ndarray
+            Birth rate by aggregation for each size class [#/(m³·s)]
+        """
+        birth = np.zeros(self.n_classes, dtype=np.float64)
+
+        for i in range(self.n_classes):
+            # (1/2) * Σ_{j=1}^{i-1} β_{j,i-j} * α_{j,i-j} * N_j * N_{i-j}
+            # Particles of size i are formed by collision of smaller particles j and (i-j)
+            for j in range(i):
+                k = i - j - 1  # Corresponding size class (0-indexed)
+                if k >= 0 and k < self.n_classes:
+                    birth[i] += (
+                        beta_matrix[j, k] * alpha_matrix[j, k] * N[j] * N[k]
+                    )
+            birth[i] *= 0.5  # Factor of 1/2 to avoid double counting
+
+        return birth
+
+    def _calculate_birth_aggregation_geometric(
+        self,
+        N: np.ndarray,
+        alpha_matrix: np.ndarray,
+        beta_matrix: np.ndarray
+    ) -> np.ndarray:
+        """
+        Calculate birth by aggregation for GEOMETRIC volume grids.
+
+        Uses fixed pivot technique (Kumar & Ramkrishna, 1996) to distribute
+        mass between adjacent bins.
+
+        For geometric grids: v_i = v_0 * r^i, so v_j + v_k doesn't match any grid point.
+        We distribute the birth between bins i and i+1 where v_i <= v_j + v_k < v_{i+1}.
+
+        Parameters:
+        -----------
+        N : np.ndarray
+            Particle number concentrations [#/m³]
+        alpha_matrix : np.ndarray
+            Collision efficiency matrix [-]
+        beta_matrix : np.ndarray
+            Collision frequency matrix [m³/s]
+
+        Returns:
+        --------
+        birth : np.ndarray
+            Birth rate by aggregation for each size class [#/(m³·s)]
+        """
+        birth = np.zeros(self.n_classes, dtype=np.float64)
+
+        # Loop over all possible collision pairs
+        for j in range(self.n_classes):
+            for k in range(j, self.n_classes):  # k >= j to avoid double counting
+                # Volume of newly formed particle
+                v_new = self.particle_volumes[j] + self.particle_volumes[k]
+
+                # Find target bin
+                i = self._find_target_bin(v_new)
+
+                if i < 0:
+                    # Underflow (shouldn't happen for aggregation)
+                    continue
+
+                # Calculate distribution factors
+                xi, eta = self._calculate_distribution_factors(v_new, i)
+
+                # Collision rate
+                if j == k:
+                    # Same size class: factor of 1/2 to avoid double counting
+                    collision_rate = 0.5 * beta_matrix[j, k] * alpha_matrix[j, k] * N[j] * N[k]
+                else:
+                    # Different size classes: full rate (symmetry already accounts for double counting)
+                    collision_rate = beta_matrix[j, k] * alpha_matrix[j, k] * N[j] * N[k]
+
+                # Distribute to bins i and i+1
+                birth[i] += xi * collision_rate
+
+                if i + 1 < self.n_classes:
+                    birth[i + 1] += eta * collision_rate
+
+        return birth
 
     def _validate_inputs(
         self,
@@ -269,20 +519,10 @@ class PopulationBalanceModel:
         if np.any(gamma_matrix < 0):
             raise ValueError("gamma_matrix must contain non-negative values")
 
-        # Optional: Check that gamma rows sum to approximately 1 (within tolerance)
-        # This is commented out as it may be too strict for some applications
-        # if self.validate_inputs:
-        #     row_sums = np.sum(gamma_matrix, axis=1)
-        #     if not np.allclose(row_sums, 1.0, atol=1e-6):
-        #         raise ValueError(
-        #             "Each row of gamma_matrix should sum to 1 (breakage distribution)"
-        #         )
-
     def validate_mass_conservation(
         self,
         N: np.ndarray,
         dndt: np.ndarray,
-        particle_volumes: np.ndarray,
         tolerance: float = 1e-10
     ) -> tuple[bool, float]:
         """
@@ -298,9 +538,6 @@ class PopulationBalanceModel:
             Current particle number concentration vector [#/m³]
         dndt : np.ndarray
             Time derivative vector [#/(m³·s)]
-        particle_volumes : np.ndarray
-            Volume of particles in each size class [m³]
-            Shape: (n_classes,)
         tolerance : float, optional
             Tolerance for mass conservation check
             Default is 1e-10
@@ -318,14 +555,8 @@ class PopulationBalanceModel:
         Rate of change: dM/dt = Σ_i (dN_i/dt) * v_i
         For pure aggregation: dM/dt ≈ 0
         """
-        if particle_volumes.shape != (self.n_classes,):
-            raise ValueError(
-                f"particle_volumes must have shape ({self.n_classes},), "
-                f"got {particle_volumes.shape}"
-            )
-
         # Calculate rate of change of total mass
-        mass_rate = np.sum(dndt * particle_volumes)
+        mass_rate = np.sum(dndt * self.particle_volumes)
 
         # Check if approximately zero
         is_conserved = abs(mass_rate) < tolerance
@@ -389,6 +620,14 @@ def construct_beta_matrix(
     - g: gravitational acceleration
     - Δρ: density difference
     - G: shear rate
+
+    Limitations:
+    ------------
+    - Assumes constant shear rate (no spatial/temporal variation)
+    - Does not include hydrodynamic interactions
+    - Uses point-particle approximation (no fractal dimensions)
+    - Does not account for Hamaker constant in perikinetic collisions
+    - For production use, consider implementing more sophisticated models
     """
     k_B = 1.380649e-23  # Boltzmann constant [J/K]
     g = 9.81  # Gravitational acceleration [m/s²]
