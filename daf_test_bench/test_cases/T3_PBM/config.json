@@ -1,0 +1,40 @@
+{
+  "test_name": "T3_PBM_Jar_Test",
+  "description": "0D Population Balance Model test case simulating jar test flocculation",
+  "mesh_file": null,
+  "stimuli": {
+    "pbm": {
+      "num_size_classes": 25,
+      "initial_mean_diameter": 5e-6,
+      "initial_std_diameter": 2e-6,
+      "initial_concentration": 1e14,
+      "kernel_coeffs": {
+        "collision_efficiency": 0.15,
+        "shear_rate": 75.0,
+        "temperature": 293.15,
+        "breakage_rate": 0.0005,
+        "primary_diameter": 1e-6,
+        "fractal_dimension": 2.3,
+        "binding_strength": 1200.0
+      },
+      "simulation": {
+        "total_time": 900.0,
+        "num_timesteps": 150
+      }
+    },
+    "solver": {
+      "timestep": 6.0,
+      "convergence_limit": 1e-6,
+      "max_iterations": 10000
+    }
+  },
+  "ground_truth_files": {
+    "fbrm": "test_cases/T3_PBM/ground_truth/fbrm_data.csv"
+  },
+  "engine_specific_settings": {
+    "Floc_Kinetics_PBM": {
+      "output_frequency": 10,
+      "mass_conservation_check": true
+    }
+  }
+}
