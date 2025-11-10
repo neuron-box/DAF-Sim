@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest:*)",
+      "Bash(python tests/benchmark_performance.py:*)",
+      "Bash(PYTHONPATH=. python:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

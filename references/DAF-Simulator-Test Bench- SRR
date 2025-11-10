@@ -1,0 +1,93 @@
+### **Document 1: Software Requirements Review (SRR)**
+
+**Project:** DAF Simulator Test Bench (DAF-TB)
+**Version:** 1.0
+**Date:** November 7, 2025
+
+-----
+
+### **1.0 Introduction**
+
+This document outlines the software requirements for the Dissolved Air Flotation Test Bench (DAF-TB). The DAF-TB is a unified testing system designed to verify, validate, and benchmark five distinct DAF simulation engines (henceforth "DAF Plants" or "Units Under Test - UUTs"). The system must be capable of:
+
+1.  **Verification & Validation (V\&V):** Confirming that each DAF Plant's implementation conforms to the mathematical and physical models described in its "source of truth" (the source academic paper).
+2.  **Comparative Benchmarking:** Quantitatively comparing the scientific accuracy and computational performance of all five DAF Plants using a standardized suite of test cases.
+
+### **2.0 Scope**
+
+  * **In-Scope:**
+      * A "pluggable" architecture to interface with the five (heterogeneous) DAF Plant engines.
+      * A master "Test Harness" to automate the execution of test cases.
+      * A "V\&V Module" to run conformance tests (e.g., MMS, analytical solutions).
+      * A "Benchmarking Module" to run a suite of standardized test cases (T1-T5).
+      * A "Metrics Module" to collect, store, and export scientific and computational performance metrics.
+  * **Out-of-Scope:**
+      * The development of the five DAF Plant engines themselves. The DAF-TB treats these as external, "black-box" components.
+      * A graphical user interface (GUI). The system will be a command-line-driven framework.
+      * The acquisition of proprietary experimental validation data (e.g., PIV/FBRM data), which is assumed to be provided.
+
+### **3.0 Use Cases**
+
+| ID | Use Case | Actor | Goal |
+| :--- | :--- | :--- | :--- |
+| **UC-1** | **Run V\&V Conformance Test** | Developer / Researcher | To verify that a single DAF Plant engine correctly implements the equations from its source paper. |
+| **UC-2** | **Run Comparative Benchmark** | Developer / Researcher | To execute a specific test case (e.g., "T5: Full-System") on all five DAF Plant engines and collect performance data. |
+| **UC-3** | **Analyze Benchmark Results** | Developer / Researcher | To query the results database and export a comparative analysis of all engines for a given test case (e.g., as a CSV or JSON file). |
+
+### **4.0 Functional Requirements (FR)**
+
+**FR-1: Pluggable Engine Interface**
+
+  * **FR-1.1:** The system shall define a standardized, abstract software interface (`IDAFPlant`) that all DAF Plant engines must implement.
+  * **FR-1.2:** The system shall provide a "Wrapper" or "Adapter" for each of the five DAF Plant engines, enabling the Test Harness to interact with them through the `IDAFPlant` interface, regardless of their underlying language (e.g., Python, C++, OpenFOAM).
+
+**FR-2: Test Harness**
+
+  * **FR-2.1:** The system shall provide a master "Test Harness" application (e.g., a main Python script).
+  * **FR-2.2:** The Harness shall be capable of loading a test configuration file (e.g., JSON) that defines the test case and stimuli.
+  * **FR-2.3:** The Harness shall iterate through the list of registered DAF Plant engines, executing the specified test case on each one via the `IDAFPlant` interface.
+
+**FR-3: Verification & Validation (V\&V) Module**
+
+  * **FR-3.1 (Code Verification - CFD):** The V\&V Module shall implement the **Method of Manufactured Solutions (MMS)**.[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      * **FR-3.1.1:** It shall be able to inject manufactured source terms into the DAF Plant's governing equations (e.g., VANS).[5, 6, 8, 9, 14, 15]
+      * **FR-3.1.2:** It shall run the engine on systematically refined meshes.
+      * **FR-3.1.3:** It shall calculate and report the observed **order of convergence** against the manufactured solution.
+  * **FR-3.2 (Code Verification - PBM):** The V\&V Module shall test the Population Balance Model (PBM) solver in isolation (0D box model).
+      * **FR-3.2.1:** It shall run test cases using known **analytical solutions** for simplified kernels (e.g., Constant, Sum/Golovin, Product).
+      * **FR-3.2.2:** It shall verify **mass conservation**.
+  * **FR-3.3 (Model Validation - CFD):** The V\&V Module shall compare the CFD model's output against experimental "ground truth" data from canonical hydrodynamic benchmarks (e.g., Lid-Driven Cavity) [16, 17, 18, 19] and DAF-specific PIV/LDA data.[20, 21, 22, 23, 24, 25, 26, 27, 28]
+  * **FR-3.4 (Model Validation - PBM):** The V\&V Module shall compare the PBM model's output against experimental "ground truth" data from Jar Tests and/or FBRM (for time-evolving PSD).
+
+**FR-4: Benchmarking Module**
+
+  * **FR-4.1:** The system shall define a standardized, machine-readable format (e.g., JSON) for **Standardized Stimuli** (inputs).
+  * **FR-4.2:** The module shall execute the following **Test Case Suite (T1-T5)**:
+      * **T1: Hydrodynamics-Only:** Single-phase (water) steady-state flow.
+      * **T2: Multiphase Hydrodynamics:** Two-phase (water + air) steady-state flow, no PBM.
+      * **T3: PBM-Only:** 0D "jar test" transient simulation, no CFD.
+      * **T4: Coupled Transport:** Full multiphase CFD + passive scalar transport (dye test), no PBM.
+      * **T5: Full-System:** Fully coupled VANS + Turbulence + PBM + Transport transient simulation.
+
+**FR-5: Metrics & Post-Processing Module**
+
+  * **FR-5.1 (Scientific Metrics):** The system shall collect and store the following scientific KPIs for each test run: Particle Removal Efficiency, Velocity Profile Error (L2-Norm), TKE Profile Error (L2-Norm), Outlet PSD Error (e.g., Wasserstein distance), Mean Floc Size (d50), Residence Time Distribution (RTD), and Mass Conservation Error.
+  * **FR-5.2 (Computational Metrics):** The system shall collect and store the following computational KPIs for each test run: Time-to-Solution (Wall-Clock), CPU-Hours, Peak Memory (RAM) Usage, Scalability (Strong/Weak), and Convergence Success (binary).[29]
+  * **FR-5.3 (Reporting):** The system shall provide a function to export the collected `results_database` into a common format (e.g., CSV, JSON) for external analysis and plotting.
+
+### **5.0 Non-Functional Requirements (NFR)**
+
+  * **NFR-1 (Modularity):** The system shall be highly modular, enforcing separation of concerns between the Harness, the Interface, and the Engine Wrappers.[30, 31, 32, 22, 33, 34, 27, 35, 36, 37]
+  * **NFR-2 (Reproducibility):** All tests shall be fully reproducible given the same configuration file and engine version.
+  * **NFR-3 (Automation):** The Test Harness shall be able to run the entire V\&V and benchmark suite from a single command.
+  * **NFR-4 (Extensibility):** The architecture must allow for a new DAF Plant engine (a 6th engine) or a new test case (T6) to be added with minimal code changes to the core Test Harness.
+
+### **6.0 Acceptance Criteria**
+
+1.  A developer can run the Test Harness, which successfully calls `run()` on all five (stubbed) DAF Plant engine wrappers via the `IDAFPlant` interface.
+2.  The V\&V Module can successfully execute an MMS test (FR-3.1) on a conforming engine and report a correct order of convergence.
+3.  The V\&V Module can successfully execute a 0D PBM test (FR-3.2) and validate mass conservation.
+4.  The Benchmarking Module can successfully execute the full T1-T5 suite on all engines and generate a single, consolidated JSON or CSV file containing all metrics from FR-5.1 and FR-5.2.
+
+-----
+
