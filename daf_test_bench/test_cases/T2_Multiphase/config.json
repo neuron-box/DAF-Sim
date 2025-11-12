@@ -1,0 +1,55 @@
+{
+  "test_name": "T2_Multiphase_Standard_k-Epsilon",
+  "description": "Standard benchmark for two-phase hydrodynamics with collision efficiency calculation",
+  "mesh_file": "test_cases/T2_Multiphase/mesh/daf_tank.msh",
+  "stimuli": {
+    "hydrodynamics": {
+      "inlet_flow_rate": 1.5,
+      "recycle_ratio": 0.1,
+      "operating_pressure": 101325,
+      "tank_geometry": {
+        "length": 4.0,
+        "width": 2.0,
+        "height": 2.5
+      }
+    },
+    "pbm": {
+      "influent_psd": [0.1, 0.5, 0.4],
+      "kernel_coeffs": {
+        "aggregation": 0.01,
+        "breakage": 0.005
+      }
+    },
+    "pillar3": {
+      "particle": {
+        "diameter": 15e-6,
+        "zeta_potential": -0.012,
+        "density": 1200.0,
+        "hamaker_constant": 8e-21
+      },
+      "bubble": {
+        "diameter": 45e-6,
+        "zeta_potential": -0.022
+      },
+      "fluid": {
+        "use_water_properties": true,
+        "ionic_strength": 0.008,
+        "ph": 7.2
+      }
+    },
+    "solver": {
+      "timestep": 0.01,
+      "convergence_limit": 1e-6
+    }
+  },
+  "ground_truth_files": {
+    "piv": "test_cases/T2_Multiphase/ground_truth/piv_data.csv",
+    "fbrm": "test_cases/T2_Multiphase/ground_truth/fbrm_data.csv"
+  },
+  "engine_specific_settings": {
+    "Pillar3_Physics_Model": {
+      "trajectory_resolution": 100,
+      "energy_barrier_threshold": 15.0
+    }
+  }
+}
