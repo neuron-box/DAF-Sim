@@ -26,10 +26,8 @@ Examples:
 
 import argparse
 import sys
+import traceback
 from pathlib import Path
-
-# Add daf_test_bench to path
-sys.path.insert(0, str(Path(__file__).parent))
 
 from daf_test_bench import TestHarness
 from daf_test_bench.engines import Pillar3PhysicsWrapper, FlocPBMWrapper
@@ -151,7 +149,6 @@ def main():
     except Exception as e:
         print(f"ERROR: {str(e)}", file=sys.stderr)
         if verbose:
-            import traceback
             traceback.print_exc()
         sys.exit(1)
 

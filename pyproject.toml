@@ -1,0 +1,89 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daf-test-bench"
+version = "1.0.0"
+description = "Unified testing and benchmarking framework for DAF simulation engines"
+readme = "daf_test_bench/README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "DAF-Sim Development Team"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "numpy>=1.22.0",
+    "scipy>=1.10.0",
+    "pandas>=1.3.0",
+    "psutil>=5.9.0",
+]
+
+[project.optional-dependencies]
+engines = [
+    # Engine dependencies - install manually for now
+    # "pillar3-physics-model",
+    # "floc-kinetics-pbm",
+]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov>=2.12",
+    "black>=21.0",
+    "flake8>=3.9",
+]
+
+[project.scripts]
+daf-benchmark = "daf_benchmark:main"
+
+[project.urls]
+Homepage = "https://github.com/neuron-box/DAF-Sim"
+Repository = "https://github.com/neuron-box/DAF-Sim"
+Documentation = "https://github.com/neuron-box/DAF-Sim/blob/main/daf_test_bench/README.md"
+
+[tool.setuptools]
+packages = ["daf_test_bench"]
+
+[tool.setuptools.package-data]
+daf_test_bench = [
+    "test_cases/*/*.json",
+    "test_cases/*/*/*.csv",
+]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.pytest.ini_options]
+testpaths = ["daf_test_bench/tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short"

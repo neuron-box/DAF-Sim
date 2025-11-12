@@ -239,8 +239,8 @@ class BenchmarkResult:
             test_name=data['test_name'],
             timestamp=data['timestamp'],
             run_status=data['run_status'],
-            scientific_metrics=ScientificMetrics(**data['scientific_metrics']),
-            computational_metrics=ComputationalMetrics(**data['computational_metrics']),
+            scientific_metrics=ScientificMetrics(**data.get('scientific_metrics', {})),
+            computational_metrics=ComputationalMetrics(**data.get('computational_metrics', {})),
             run_log=data.get('run_log', '')
         )
 

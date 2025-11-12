@@ -63,15 +63,19 @@ The framework follows a **Component-Based Software Engineering (CBSE)** design w
 ### Requirements
 
 - Python 3.8+
-- NumPy >= 1.20.0
-- SciPy >= 1.7.0
+- NumPy >= 1.22.0
+- SciPy >= 1.10.0
 - pandas >= 1.3.0
+- psutil >= 5.9.0
 
-### Install Dependencies
+### Install the Framework
 
 ```bash
-pip install -r daf_test_bench/requirements.txt
+cd DAF-Sim
+pip install -e .
 ```
+
+This installs the `daf-test-bench` package and all its dependencies.
 
 ### Install DAF Engines
 

@@ -16,7 +16,8 @@ __version__ = "1.0.0"
 __author__ = "DAF-Sim Development Team"
 
 from .interfaces.idaf_plant import IDAFPlant
-from .metrics.metrics_collector import MetricsCollector, BenchmarkResult
+from .metrics.metrics_collector import MetricsCollector
+from .data_models import BenchmarkResult
 from .test_harness import TestHarness
 
 __all__ = [

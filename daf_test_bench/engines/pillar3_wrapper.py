@@ -10,13 +10,9 @@ API calls and extracts results in the standardized BenchmarkResult format.
 
 import time
 import traceback
+import logging
 from typing import Dict, Any, Optional
 import numpy as np
-import sys
-from pathlib import Path
-
-# Add pillar3_physics_model to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "pillar3_physics_model" / "src"))
 
 from pillar3_physics_model import (
     Particle, Bubble, FluidProperties,
@@ -45,7 +41,9 @@ class Pillar3PhysicsWrapper(IDAFPlant):
         self._results: Optional[Dict[str, Any]] = None
         self._start_time: float = 0.0
         self._end_time: float = 0.0
-        self._log: List[str] = []
+
+        # Set up logging
+        self.logger = logging.getLogger(f"{__name__}.{self.engine_name}")
 
     def setup(self, configuration: Dict[str, Any]) -> bool:
         """
@@ -77,8 +75,8 @@ class Pillar3PhysicsWrapper(IDAFPlant):
         """
         try:
             self._config = configuration
-            self._log.append(f"Setting up {self.engine_name}")
-            self._log.append(f"Test: {configuration.get('test_name', 'Unknown')}")
+            self.logger.info(f"Setting up {self.engine_name}")
+            self.logger.info(f"Test: {configuration.get('test_name', 'Unknown')}")
 
             # Extract engine-specific settings
             engine_settings = configuration.get('engine_specific_settings', {}).get(
@@ -92,7 +90,7 @@ class Pillar3PhysicsWrapper(IDAFPlant):
             if not pillar3_params:
                 # Use default DAF parameters if not specified
                 pillar3_params = self._get_default_parameters()
-                self._log.append("Using default DAF parameters")
+                self.logger.info("Using default DAF parameters")
 
             # Create particle
             particle_params = pillar3_params.get('particle', {})
@@ -127,16 +125,16 @@ class Pillar3PhysicsWrapper(IDAFPlant):
                     relative_permittivity=fluid_params.get('relative_permittivity', 78.5)
                 )
 
-            self._log.append(f"Particle diameter: {self._particle.diameter*1e6:.1f} μm")
-            self._log.append(f"Bubble diameter: {self._bubble.diameter*1e6:.1f} μm")
-            self._log.append(f"Ionic strength: {self._fluid.ionic_strength:.4f} M")
+            self.logger.info(f"Particle diameter: {self._particle.diameter*1e6:.1f} μm")
+            self.logger.info(f"Bubble diameter: {self._bubble.diameter*1e6:.1f} μm")
+            self.logger.info(f"Ionic strength: {self._fluid.ionic_strength:.4f} M")
 
             self._is_setup = True
             return True
 
         except Exception as e:
-            self._log.append(f"ERROR in setup: {str(e)}")
-            self._log.append(traceback.format_exc())
+            self.logger.error(f"ERROR in setup: {str(e)}")
+            self.logger.debug(traceback.format_exc())
             return False
 
     def initialize(self) -> bool:
@@ -151,19 +149,19 @@ class Pillar3PhysicsWrapper(IDAFPlant):
         """
         try:
             self.validate_workflow("initialize")
-            self._log.append("Initializing Pillar3 Physics Model")
+            self.logger.info("Initializing Pillar3 Physics Model")
 
             # Verify all components are configured
             if self._particle is None or self._bubble is None or self._fluid is None:
                 raise RuntimeError("Not all components configured")
 
             self._is_initialized = True
-            self._log.append("Initialization complete")
+            self.logger.info("Initialization complete")
             return True
 
         except Exception as e:
-            self._log.append(f"ERROR in initialize: {str(e)}")
-            self._log.append(traceback.format_exc())
+            self.logger.error(f"ERROR in initialize: {str(e)}")
+            self.logger.debug(traceback.format_exc())
             return False
 
     def run(self) -> bool:
@@ -175,7 +173,7 @@ class Pillar3PhysicsWrapper(IDAFPlant):
         """
         try:
             self.validate_workflow("run")
-            self._log.append("Running collision efficiency calculation")
+            self.logger.info("Running collision efficiency calculation")
 
             self._start_time = time.time()
 
@@ -189,17 +187,17 @@ class Pillar3PhysicsWrapper(IDAFPlant):
             self._end_time = time.time()
             elapsed = self._end_time - self._start_time
 
-            self._log.append(f"Calculation complete in {elapsed:.6f} s")
-            self._log.append(f"α_bp = {self._results['alpha_bp']:.6f}")
-            self._log.append(f"η_collision = {self._results['eta_collision']:.6f}")
-            self._log.append(f"α_attachment = {self._results['alpha_attachment']:.6f}")
+            self.logger.info(f"Calculation complete in {elapsed:.6f} s")
+            self.logger.info(f"α_bp = {self._results['alpha_bp']:.6f}")
+            self.logger.info(f"η_collision = {self._results['eta_collision']:.6f}")
+            self.logger.info(f"α_attachment = {self._results['alpha_attachment']:.6f}")
 
             self._run_completed = True
             return True
 
         except Exception as e:
-            self._log.append(f"ERROR in run: {str(e)}")
-            self._log.append(traceback.format_exc())
+            self.logger.error(f"ERROR in run: {str(e)}")
+            self.logger.debug(traceback.format_exc())
             return False
 
     def get_metrics(self) -> Dict[str, Any]:
@@ -228,11 +226,20 @@ class Pillar3PhysicsWrapper(IDAFPlant):
                     'energy_barrier_kT': self._results['energy_barrier_kT']
                 }
 
-            # Computational metrics
+            # Computational metrics with real memory measurement
+            try:
+                import psutil
+                import os
+                process = psutil.Process(os.getpid())
+                peak_ram_gb = process.memory_info().rss / (1024 ** 3)
+            except ImportError:
+                # Fallback if psutil not available
+                peak_ram_gb = None
+
             comp_metrics = ComputationalMetrics(
                 wall_clock_sec=self._end_time - self._start_time if self._start_time > 0 else None,
                 cpu_hours=(self._end_time - self._start_time) / 3600.0 if self._start_time > 0 else None,
-                peak_ram_gb=0.1,  # Minimal memory usage for this model
+                peak_ram_gb=peak_ram_gb,
                 converged=True,
                 num_iterations=1  # Single calculation
             )
@@ -244,13 +251,13 @@ class Pillar3PhysicsWrapper(IDAFPlant):
                 run_status=run_status,
                 sci_metrics=sci_metrics,
                 comp_metrics=comp_metrics,
-                run_log="\n".join(self._log)
+                run_log=self._get_log_contents()
             )
 
             return result.to_dict()
 
         except Exception as e:
-            error_log = "\n".join(self._log) + f"\nERROR in get_metrics: {str(e)}\n{traceback.format_exc()}"
+            error_log = self._get_log_contents() + f"\nERROR in get_metrics: {str(e)}\n{traceback.format_exc()}"
             result = BenchmarkResult.create(
                 engine_name=self.engine_name,
                 test_name=self._config.get('test_name', 'Unknown') if self._config else 'Unknown',
@@ -293,8 +300,17 @@ class Pillar3PhysicsWrapper(IDAFPlant):
 
     def finalize(self) -> None:
         """Clean up resources."""
-        self._log.append("Finalizing Pillar3 Physics Model")
+        self.logger.info("Finalizing Pillar3 Physics Model")
         # No cleanup needed for this simple model
+
+    def _get_log_contents(self) -> str:
+        """
+        Get logging contents.
+
+        In the future, this could return contents from a logging handler.
+        For now, returns a simple summary.
+        """
+        return f"Pillar3 Physics Model log for {self.engine_name}"
 
     def _get_default_parameters(self) -> Dict[str, Any]:
         """Get default DAF operating parameters."""

@@ -10,28 +10,21 @@ API calls and extracts results in the standardized BenchmarkResult format.
 
 import time
 import traceback
+import logging
 from typing import Dict, Any, Optional, List
 import numpy as np
-import sys
-from pathlib import Path
 
-# Add parent directory of floc_kinetics_pbm to path
-floc_pbm_parent = str(Path(__file__).parent.parent.parent)
-if floc_pbm_parent not in sys.path:
-    sys.path.insert(0, floc_pbm_parent)
-
-# Import after path is set - use package import
+# Import PBM dependencies
 try:
-    from floc_kinetics_pbm.src.kernels import calculate_floc_kernels
-    from floc_kinetics_pbm.src.pbe_solver import solve_pbe_transient, calculate_psd_statistics
+    from floc_kinetics_pbm.src.pbe_solver import PopulationBalanceModel
     from floc_kinetics_pbm.src.properties import FlocProperties
+    PBM_AVAILABLE = True
 except ImportError as e:
     # Fallback: mark wrapper as unavailable
-    print(f"Warning: Floc PBM dependencies not available: {e}")
-    calculate_floc_kernels = None
-    solve_pbe_transient = None
-    calculate_psd_statistics = None
+    logging.warning(f"Floc PBM dependencies not available: {e}")
+    PopulationBalanceModel = None
     FlocProperties = None
+    PBM_AVAILABLE = False
 
 from ..interfaces.idaf_plant import IDAFPlant
 from ..data_models import BenchmarkResult, ScientificMetrics, ComputationalMetrics
@@ -49,8 +42,8 @@ class FlocPBMWrapper(IDAFPlant):
     def __init__(self):
         """Initialize Floc Kinetics PBM wrapper."""
         super().__init__(engine_name="Floc_Kinetics_PBM")
+        self._pbm_model: Optional['PopulationBalanceModel'] = None
         self._properties: Optional[FlocProperties] = None
-        self._size_classes: Optional[np.ndarray] = None
         self._initial_psd: Optional[np.ndarray] = None
         self._time_points: Optional[np.ndarray] = None
         self._psd_history: Optional[np.ndarray] = None
@@ -58,9 +51,12 @@ class FlocPBMWrapper(IDAFPlant):
         self._statistics: Optional[Dict[str, Any]] = None
         self._start_time: float = 0.0
         self._end_time: float = 0.0
-        self._log: List[str] = []
         self._simulation_time: float = 0.0
         self._num_timesteps: int = 0
+        self._shear_rate: float = 50.0
+
+        # Set up logging
+        self.logger = logging.getLogger(f"{__name__}.{self.engine_name}")
 
     def setup(self, configuration: Dict[str, Any]) -> bool:
         """
@@ -69,13 +65,16 @@ class FlocPBMWrapper(IDAFPlant):
         Expected configuration structure:
             stimuli:
                 pbm:
-                    influent_psd: [list of concentrations #/m³]
-                    size_classes: [list of diameters in m]
+                    num_size_classes: [int] Number of bins
+                    d_min: [m] Minimum diameter
+                    d_max: [m] Maximum diameter
+                    initial_mean_diameter: [m]
+                    initial_concentration: [#/m³]
                     kernel_coeffs:
                         collision_efficiency: [-]
                         shear_rate: [1/s]
                         temperature: [K]
-                        breakage_rate: [-]
+                        breakage_coefficient: [-]
                     simulation:
                         total_time: [s]
                         num_timesteps: [-]
@@ -87,9 +86,13 @@ class FlocPBMWrapper(IDAFPlant):
             bool: True if setup successful
         """
         try:
+            if not PBM_AVAILABLE:
+                self.logger.error("PBM dependencies not available")
+                return False
+
             self._config = configuration
-            self._log.append(f"Setting up {self.engine_name}")
-            self._log.append(f"Test: {configuration.get('test_name', 'Unknown')}")
+            self.logger.info(f"Setting up {self.engine_name}")
+            self.logger.info(f"Test: {configuration.get('test_name', 'Unknown')}")
 
             # Extract PBM stimuli
             stimuli = configuration.get('stimuli', {})
@@ -98,63 +101,69 @@ class FlocPBMWrapper(IDAFPlant):
             if not pbm_params:
                 # Use default parameters
                 pbm_params = self._get_default_parameters()
-                self._log.append("Using default PBM parameters")
+                self.logger.info("Using default PBM parameters")
 
-            # Size classes
-            if 'size_classes' in pbm_params:
-                self._size_classes = np.array(pbm_params['size_classes'])
-            else:
-                # Create logarithmic size classes (1 μm to 1000 μm)
-                num_classes = pbm_params.get('num_size_classes', 20)
-                self._size_classes = np.logspace(-6, -3, num_classes)
-
-            # Initial PSD
-            if 'influent_psd' in pbm_params:
-                self._initial_psd = np.array(pbm_params['influent_psd'])
-                if len(self._initial_psd) != len(self._size_classes):
-                    raise ValueError(
-                        f"PSD length ({len(self._initial_psd)}) must match "
-                        f"size classes ({len(self._size_classes)})"
-                    )
-            else:
-                # Default: Normal distribution centered at 10 μm
-                mean_size = pbm_params.get('initial_mean_diameter', 10e-6)
-                std_size = pbm_params.get('initial_std_diameter', 3e-6)
-                total_conc = pbm_params.get('initial_concentration', 1e13)
-                self._initial_psd = self._create_normal_psd(
-                    self._size_classes, mean_size, std_size, total_conc
-                )
+            # Size parameters
+            num_classes = pbm_params.get('num_size_classes', 20)
+            d_min = pbm_params.get('d_min', 1e-6)
+            d_max = pbm_params.get('d_max', 1e-3)
 
             # Kernel coefficients
             kernel_coeffs = pbm_params.get('kernel_coeffs', {})
+            self._shear_rate = kernel_coeffs.get('shear_rate', 50.0)
+
             self._properties = FlocProperties(
                 collision_efficiency=kernel_coeffs.get('collision_efficiency', 0.1),
-                shear_rate=kernel_coeffs.get('shear_rate', 50.0),
                 temperature=kernel_coeffs.get('temperature', 293.15),
-                breakage_rate=kernel_coeffs.get('breakage_rate', 0.001),
+                breakage_coefficient=kernel_coeffs.get('breakage_coefficient', 0.001),
                 primary_particle_diameter=kernel_coeffs.get('primary_diameter', 1e-6),
                 fractal_dimension=kernel_coeffs.get('fractal_dimension', 2.3),
                 floc_binding_strength=kernel_coeffs.get('binding_strength', 1e3)
             )
+
+            # Create PBM model
+            self._pbm_model = PopulationBalanceModel(
+                n_bins=num_classes,
+                d_min=d_min,
+                d_max=d_max,
+                properties=self._properties
+            )
+
+            # Initial PSD
+            if 'influent_psd' in pbm_params:
+                self._initial_psd = np.array(pbm_params['influent_psd'])
+                if len(self._initial_psd) != self._pbm_model.n_bins:
+                    raise ValueError(
+                        f"PSD length ({len(self._initial_psd)}) must match "
+                        f"size classes ({self._pbm_model.n_bins})"
+                    )
+            else:
+                # Default: Log-normal distribution centered at specified diameter
+                mean_size = pbm_params.get('initial_mean_diameter', 10e-6)
+                std_size = pbm_params.get('initial_std_diameter', 3e-6)
+                total_conc = pbm_params.get('initial_concentration', 1e13)
+                self._initial_psd = self._create_lognormal_psd(
+                    self._pbm_model.diameters, mean_size, std_size, total_conc
+                )
 
             # Simulation parameters
             sim_params = pbm_params.get('simulation', {})
             self._simulation_time = sim_params.get('total_time', 600.0)  # 10 min default
             self._num_timesteps = sim_params.get('num_timesteps', 100)
 
-            self._log.append(f"Size classes: {len(self._size_classes)}")
-            self._log.append(f"Size range: {self._size_classes[0]*1e6:.2f} - {self._size_classes[-1]*1e6:.0f} μm")
-            self._log.append(f"Initial total concentration: {np.sum(self._initial_psd):.2e} #/m³")
-            self._log.append(f"Collision efficiency: {self._properties.collision_efficiency}")
-            self._log.append(f"Shear rate: {self._properties.shear_rate:.1f} 1/s")
-            self._log.append(f"Simulation time: {self._simulation_time:.0f} s")
+            self.logger.info(f"Size classes: {self._pbm_model.n_bins}")
+            self.logger.info(f"Size range: {self._pbm_model.d_min*1e6:.2f} - {self._pbm_model.d_max*1e6:.0f} μm")
+            self.logger.info(f"Initial total concentration: {np.sum(self._initial_psd):.2e} #/m³")
+            self.logger.info(f"Collision efficiency: {self._properties.collision_efficiency}")
+            self.logger.info(f"Shear rate: {self._shear_rate:.1f} 1/s")
+            self.logger.info(f"Simulation time: {self._simulation_time:.0f} s")
 
             self._is_setup = True
             return True
 
         except Exception as e:
-            self._log.append(f"ERROR in setup: {str(e)}")
-            self._log.append(traceback.format_exc())
+            self.logger.error(f"ERROR in setup: {str(e)}")
+            self.logger.debug(traceback.format_exc())
             return False
 
     def initialize(self) -> bool:
@@ -168,23 +177,23 @@ class FlocPBMWrapper(IDAFPlant):
         """
         try:
             self.validate_workflow("initialize")
-            self._log.append("Initializing PBM solver")
+            self.logger.info("Initializing PBM solver")
 
             # Verify configuration
-            if self._size_classes is None or self._initial_psd is None:
-                raise RuntimeError("Size classes and initial PSD must be configured")
+            if self._pbm_model is None or self._initial_psd is None:
+                raise RuntimeError("PBM model and initial PSD must be configured")
 
             # Log mass conservation check
-            initial_mass = np.sum(self._initial_psd * (self._size_classes ** 3))
-            self._log.append(f"Initial total mass (volume): {initial_mass:.2e} m³/m³")
+            initial_mass = np.sum(self._initial_psd * (self._pbm_model.volumes))
+            self.logger.info(f"Initial total volume: {initial_mass:.2e} m³/m³")
 
             self._is_initialized = True
-            self._log.append("Initialization complete")
+            self.logger.info("Initialization complete")
             return True
 
         except Exception as e:
-            self._log.append(f"ERROR in initialize: {str(e)}")
-            self._log.append(traceback.format_exc())
+            self.logger.error(f"ERROR in initialize: {str(e)}")
+            self.logger.debug(traceback.format_exc())
             return False
 
     def run(self) -> bool:
@@ -198,59 +207,49 @@ class FlocPBMWrapper(IDAFPlant):
         """
         try:
             self.validate_workflow("run")
-            self._log.append("Running PBM simulation")
-            self._log.append(f"Integrating from t=0 to t={self._simulation_time:.0f} s")
+            self.logger.info("Running PBM simulation")
+            self.logger.info(f"Integrating from t=0 to t={self._simulation_time:.0f} s")
 
             self._start_time = time.time()
-
-            # Calculate kernels
-            self._log.append("Computing aggregation and breakage kernels...")
-            kernels = calculate_floc_kernels(
-                self._size_classes,
-                self._properties
-            )
 
             # Time points for integration
             self._time_points = np.linspace(0, self._simulation_time, self._num_timesteps + 1)
 
-            # Solve PBE
-            self._log.append("Solving population balance equation...")
-            self._psd_history = solve_pbe_transient(
-                self._size_classes,
-                self._initial_psd,
-                self._time_points,
-                kernels['aggregation_kernel'],
-                kernels['breakage_kernel']
+            # Solve PBE using the PopulationBalanceModel.solve() method
+            self.logger.info("Solving population balance equation...")
+            t, n_solution = self._pbm_model.solve(
+                n_initial=self._initial_psd,
+                t_span=self._time_points,
+                G=self._shear_rate,
+                recompute_kernels=True
             )
 
-            # Extract final PSD
-            self._final_psd = self._psd_history[-1, :]
+            # Store results
+            self._psd_history = n_solution
+            self._final_psd = n_solution[-1, :]
 
-            # Calculate statistics
-            self._statistics = calculate_psd_statistics(
-                self._size_classes,
-                self._final_psd
-            )
+            # Calculate statistics using the model's summary_statistics method
+            self._statistics = self._pbm_model.summary_statistics(self._final_psd)
 
             self._end_time = time.time()
             elapsed = self._end_time - self._start_time
 
             # Mass conservation check
-            initial_mass = np.sum(self._initial_psd * (self._size_classes ** 3))
-            final_mass = np.sum(self._final_psd * (self._size_classes ** 3))
-            mass_error = abs(final_mass - initial_mass) / initial_mass * 100
+            initial_mass = np.sum(self._initial_psd * self._pbm_model.volumes)
+            final_mass = np.sum(self._final_psd * self._pbm_model.volumes)
+            mass_error = abs(final_mass - initial_mass) / initial_mass * 100 if initial_mass > 0 else 0.0
 
-            self._log.append(f"Simulation complete in {elapsed:.3f} s")
-            self._log.append(f"Final mean diameter (d50): {self._statistics['d50']*1e6:.2f} μm")
-            self._log.append(f"Final total concentration: {np.sum(self._final_psd):.2e} #/m³")
-            self._log.append(f"Mass conservation error: {mass_error:.4f}%")
+            self.logger.info(f"Simulation complete in {elapsed:.3f} s")
+            self.logger.info(f"Final mean diameter (d50): {self._statistics['d50']*1e6:.2f} μm")
+            self.logger.info(f"Final total concentration: {self._statistics['total_number']:.2e} #/m³")
+            self.logger.info(f"Mass conservation error: {mass_error:.4f}%")
 
             self._run_completed = True
             return True
 
         except Exception as e:
-            self._log.append(f"ERROR in run: {str(e)}")
-            self._log.append(traceback.format_exc())
+            self.logger.error(f"ERROR in run: {str(e)}")
+            self.logger.debug(traceback.format_exc())
             return False
 
     def get_metrics(self) -> Dict[str, Any]:
@@ -273,27 +272,38 @@ class FlocPBMWrapper(IDAFPlant):
 
                 # Calculate mass conservation error
                 if self._initial_psd is not None and self._final_psd is not None:
-                    initial_mass = np.sum(self._initial_psd * (self._size_classes ** 3))
-                    final_mass = np.sum(self._final_psd * (self._size_classes ** 3))
-                    mass_error = abs(final_mass - initial_mass) / initial_mass * 100
+                    initial_mass = np.sum(self._initial_psd * self._pbm_model.volumes)
+                    final_mass = np.sum(self._final_psd * self._pbm_model.volumes)
+                    mass_error = abs(final_mass - initial_mass) / initial_mass * 100 if initial_mass > 0 else 0.0
                     sci_metrics.mass_conservation_error_pct = mass_error
 
                 # Additional PBM metrics
                 sci_metrics.additional_metrics = {
                     'mean_diameter': self._statistics['mean_diameter'],
-                    'd10': self._statistics['d10'],
-                    'd32': self._statistics['d32'],
-                    'd43': self._statistics['d43'],
-                    'd90': self._statistics['d90'],
-                    'total_concentration': self._statistics['total_concentration'],
-                    'total_volume_fraction': self._statistics['total_volume_fraction']
+                    'd10_number': self._statistics['d10_number'],
+                    'd50_number': self._statistics['d50_number'],
+                    'd90_number': self._statistics['d90_number'],
+                    'd10_volume': self._statistics['d10_volume'],
+                    'd50_volume': self._statistics['d50_volume'],
+                    'd90_volume': self._statistics['d90_volume'],
+                    'total_concentration': self._statistics['total_number'],
+                    'total_volume_fraction': self._statistics['volume_fraction']
                 }
 
-            # Computational metrics
+            # Computational metrics with real memory measurement
+            try:
+                import psutil
+                import os
+                process = psutil.Process(os.getpid())
+                peak_ram_gb = process.memory_info().rss / (1024 ** 3)
+            except ImportError:
+                # Fallback if psutil not available
+                peak_ram_gb = None
+
             comp_metrics = ComputationalMetrics(
                 wall_clock_sec=self._end_time - self._start_time if self._start_time > 0 else None,
                 cpu_hours=(self._end_time - self._start_time) / 3600.0 if self._start_time > 0 else None,
-                peak_ram_gb=0.5,  # Estimate based on array sizes
+                peak_ram_gb=peak_ram_gb,
                 converged=True,
                 num_iterations=self._num_timesteps
             )
@@ -305,13 +315,13 @@ class FlocPBMWrapper(IDAFPlant):
                 run_status=run_status,
                 sci_metrics=sci_metrics,
                 comp_metrics=comp_metrics,
-                run_log="\n".join(self._log)
+                run_log=self._get_log_contents()
             )
 
             return result.to_dict()
 
         except Exception as e:
-            error_log = "\n".join(self._log) + f"\nERROR in get_metrics: {str(e)}\n{traceback.format_exc()}"
+            error_log = self._get_log_contents() + f"\nERROR in get_metrics: {str(e)}\n{traceback.format_exc()}"
             result = BenchmarkResult.create(
                 engine_name=self.engine_name,
                 test_name=self._config.get('test_name', 'Unknown') if self._config else 'Unknown',
@@ -338,7 +348,7 @@ class FlocPBMWrapper(IDAFPlant):
         elif variable_name == 'psd_history':
             return self._psd_history.copy() if self._psd_history is not None else None
         elif variable_name == 'size_classes':
-            return self._size_classes.copy() if self._size_classes is not None else None
+            return self._pbm_model.diameters.copy() if self._pbm_model is not None else None
         elif variable_name == 'time_points':
             return self._time_points.copy() if self._time_points is not None else None
 
@@ -346,11 +356,11 @@ class FlocPBMWrapper(IDAFPlant):
 
     def finalize(self) -> None:
         """Clean up resources."""
-        self._log.append("Finalizing PBM engine")
+        self.logger.info("Finalizing PBM engine")
         # Clear large arrays to free memory
         self._psd_history = None
 
-    def _create_normal_psd(
+    def _create_lognormal_psd(
         self,
         size_classes: np.ndarray,
         mean: float,
@@ -369,19 +379,30 @@ class FlocPBMWrapper(IDAFPlant):
         Returns:
             PSD array [#/m³]
         """
-        # Log-normal distribution
+        # Correct log-normal conversion
         log_mean = np.log(mean)
-        log_std = std / mean  # Approximate
+        log_std = np.sqrt(np.log(1 + (std / mean)**2)) if mean > 0 else 0
 
         psd = np.exp(-0.5 * ((np.log(size_classes) - log_mean) / log_std) ** 2)
         psd = psd / np.sum(psd) * total_conc
 
         return psd
 
+    def _get_log_contents(self) -> str:
+        """
+        Get logging contents.
+
+        In the future, this could return contents from a logging handler.
+        For now, returns a simple summary.
+        """
+        return f"PBM simulation log for {self.engine_name}"
+
     def _get_default_parameters(self) -> Dict[str, Any]:
         """Get default PBM parameters."""
         return {
             'num_size_classes': 20,
+            'd_min': 1e-6,
+            'd_max': 1e-3,
             'initial_mean_diameter': 10e-6,
             'initial_std_diameter': 3e-6,
             'initial_concentration': 1e13,
@@ -389,7 +410,7 @@ class FlocPBMWrapper(IDAFPlant):
                 'collision_efficiency': 0.1,
                 'shear_rate': 50.0,
                 'temperature': 293.15,
-                'breakage_rate': 0.001,
+                'breakage_coefficient': 0.001,
                 'primary_diameter': 1e-6,
                 'fractal_dimension': 2.3,
                 'binding_strength': 1e3

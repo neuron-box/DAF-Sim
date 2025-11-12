@@ -2,12 +2,14 @@
 
 ## Installation
 
-### 1. Install Dependencies
+### 1. Install the DAF Test Bench Package
 
 ```bash
 cd DAF-Sim
-pip install -r daf_test_bench/requirements.txt
+pip install -e .
 ```
+
+This will automatically install all required dependencies (numpy, scipy, pandas, psutil).
 
 ### 2. Install DAF Engine Components
 

@@ -12,9 +12,6 @@ from pathlib import Path
 import sys
 import numpy as np
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
 from daf_test_bench.interfaces.idaf_plant import IDAFPlant
 from daf_test_bench.data_models import (
     TestConfiguration, BenchmarkResult,
