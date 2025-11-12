@@ -42,7 +42,7 @@ def main():
     )
 
     # Execution mode
-    mode_group = parser.add_mutually_exclusive_group(required=True)
+    mode_group = parser.add_mutually_exclusive_group(required=False)
     mode_group.add_argument(
         '--config',
         type=str,
@@ -96,10 +96,20 @@ def main():
     # Create test harness
     harness = TestHarness()
 
-    # Register available engines
-    harness.register_engine(Pillar3PhysicsWrapper)
-    harness.register_engine(FlocPBMWrapper)
+    # Register available engines (skip if None due to missing dependencies)
+    if Pillar3PhysicsWrapper is not None:
+        harness.register_engine(Pillar3PhysicsWrapper)
+    if FlocPBMWrapper is not None:
+        harness.register_engine(FlocPBMWrapper)
     # Add more engines here as they are developed
+
+    # Check if any engines are available
+    if len(harness.list_engines()) == 0:
+        print("ERROR: No DAF engines available!", file=sys.stderr)
+        print("\nEngine dependencies not installed. Please install engine packages:", file=sys.stderr)
+        print("  cd pillar3_physics_model && pip install -e .", file=sys.stderr)
+        print("  cd floc_kinetics_pbm && pip install -e .", file=sys.stderr)
+        sys.exit(1)
 
     # List engines and exit if requested
     if args.list_engines:
@@ -107,6 +117,12 @@ def main():
         for engine_name in harness.list_engines():
             print(f"  - {engine_name}")
         sys.exit(0)
+
+    # Validate that either --config or --suite was provided
+    if not args.config and not args.suite:
+        print("ERROR: Either --config or --suite must be specified", file=sys.stderr)
+        parser.print_help()
+        sys.exit(1)
 
     verbose = not args.quiet
 

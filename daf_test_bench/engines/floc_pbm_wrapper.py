@@ -74,7 +74,9 @@ class FlocPBMWrapper(IDAFPlant):
                         collision_efficiency: [-]
                         shear_rate: [1/s]
                         temperature: [K]
-                        breakage_coefficient: [-]
+                        primary_diameter: [m]
+                        fractal_dimension: [-]
+                        binding_strength: [N/m²]
                     simulation:
                         total_time: [s]
                         num_timesteps: [-]
@@ -115,10 +117,9 @@ class FlocPBMWrapper(IDAFPlant):
             self._properties = FlocProperties(
                 collision_efficiency=kernel_coeffs.get('collision_efficiency', 0.1),
                 temperature=kernel_coeffs.get('temperature', 293.15),
-                breakage_coefficient=kernel_coeffs.get('breakage_coefficient', 0.001),
                 primary_particle_diameter=kernel_coeffs.get('primary_diameter', 1e-6),
                 fractal_dimension=kernel_coeffs.get('fractal_dimension', 2.3),
-                floc_binding_strength=kernel_coeffs.get('binding_strength', 1e3)
+                binding_strength=kernel_coeffs.get('binding_strength', 1e3)
             )
 
             # Create PBM model
@@ -410,7 +411,6 @@ class FlocPBMWrapper(IDAFPlant):
                 'collision_efficiency': 0.1,
                 'shear_rate': 50.0,
                 'temperature': 293.15,
-                'breakage_coefficient': 0.001,
                 'primary_diameter': 1e-6,
                 'fractal_dimension': 2.3,
                 'binding_strength': 1e3
